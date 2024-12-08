@@ -34,34 +34,72 @@ class Planner(torch.nn.Module):
         )
 
         # Define second CNN branch
-        self.conv2 = torch.nn.conv2(
+        self.conv2 = torch.nn.Sequential(
             torch.nn.Conv2d(3, 16, 5, 2, 2),  #5x5 kernel stride 2 padding 2
             torch.nn.ReLU(),
             torch.nn.Conv2d(16, 1, 1, 1)  # Reduce to 1 output channel (heatmap)
         )
 
+        self.conv2 = torch.nn.Sequential(
+            # Initial block: Expand channels and extract basic features
+            torch.nn.Conv2d(3, 32, kernel_size=5, stride=2, padding=2),  # Downsample by 2
+            torch.nn.BatchNorm2d(32),
+            torch.nn.ReLU(),
+
+            # Residual block 1
+            torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            torch.nn.BatchNorm2d(64),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
+            torch.nn.BatchNorm2d(32),
+            torch.nn.ReLU(),
+
+            # Residual block 2
+            torch.nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # Downsample by 2
+            torch.nn.BatchNorm2d(64),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
+            torch.nn.BatchNorm2d(32),
+            torch.nn.ReLU(),
+
+            # Squeeze-and-Excitation Block
+            torch.nn.AdaptiveAvgPool2d(1),  # Global pooling
+            torch.nn.Conv2d(32, 16, kernel_size=1),  # Reduce to bottleneck
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(16, 32, kernel_size=1),  # Expand back
+            torch.nn.Sigmoid(),
+
+            # Final heatmap generation
+            torch.nn.Conv2d(32, 1, kernel_size=1, stride=1),  # Single-channel heatmap
+            torch.nn.Upsample(size=(48, 64), mode='bilinear', align_corners=False)  # Match desired output dimensions
+        )
+        #cnn outputs are (B,1,48,64) (for now)
+
         # Learnable weights for combining the two heatmaps
         self.weight1 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the first branch
         self.weight2 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the second branch
+        #self.weight3 = torch.nn.Parameter(torch.tensor(0))  # Weight for the third branch
 
     def forward(self, img):
         """
-        Predict the aim point in image coordinate, given the supertuxkart image
-        @img: (B,3,96,128)
-        return: (B,2) - Predicted aim point coordinates
+        Predict the aim point in image coordinates, given the supertuxkart image
+        @img: (B, 3, 96, 128)
+        return: (B, 2) - Predicted aim point coordinates
         """
         # Forward pass through both CNN branches
         x1 = self.conv1(img)
-        x2 = self.conv2(img)
+        #x2 = self.conv2(img)
 
-        # Combine the outputs using learnable weights
-        combined_heatmap = self.weight1 * x1 + self.weight2 * x2
+        # Normalize the weights so that they sum to 1
+        # weight_sum = self.weight1 + self.weight2
+        # normalized_weight1 = self.weight1 / weight_sum
+        # normalized_weight2 = self.weight2 / weight_sum
 
-        #print(img.shape)
-        #print(x.shape)
+        # Combine the outputs using the normalized weights
+        #combined_heatmap = normalized_weight1 * x1 + normalized_weight2 * x2
 
         # Return the soft-argmax of the combined heatmap
-        return spatial_argmax(combined_heatmap[:, 0])  # Get the first channel (since it's single-channel)
+        return spatial_argmax(x1[:, 0])  # Get the first channel (since it's single-channel)
 
 
 def save_model(model):
