@@ -72,7 +72,7 @@ class PyTux:
         p = proj @ view @ np.array(list(x) + [1])
         return np.clip(np.array([p[0] / p[-1], -p[1] / p[-1]]), -1, 1)
 
-    def rollout(self, track, controller, planner=None, max_frames=1000, verbose=False, data_callback=None):
+    def rollout(self, track, planner=None, max_frames=1000, verbose=False, data_callback=None):
         """
         Play a level (track) for a single round.
         """
@@ -96,12 +96,10 @@ class PyTux:
         last_rescue = 0
 
         if verbose:
+            import matplotlib.pyplot as plt
             fig, ax = plt.subplots(1, 1)
 
-        alpha = 0.5
         gamma = 0.9
-        prev_aim_point_image = [0.0, 0.0]
-        previous_vel = 0.0
 
         for t in range(max_frames):
             state.update()
@@ -159,8 +157,8 @@ class PyTux:
             self.k.step(pystk_action)
 
             # UPDATE HERE: Policy Gradient / DPG Update
-            progress = (kart.overall_distance / track.length) * (t / max_frames)
-            y_target = progress + gamma * self.model(torch.tensor([aim_point_image[0], aim_point_image[1], current_vel, 25]).unsqueeze(0))
+            reward = (kart.overall_distance / track.length) * (t / max_frames)
+            y_target = reward + gamma * self.model(torch.tensor([aim_point_image[0], aim_point_image[1], current_vel, 25]).unsqueeze(0))
 
             # Calculate gradient
             gradient = y_target - action
@@ -168,11 +166,9 @@ class PyTux:
             # Perform gradient update on model weights (specifically the first layer)
             self.optimizer.zero_grad()  # Clear previous gradients
             loss = (0.5 * (gradient ** 2)).mean()  # Mean squared error loss
+            print("Epoch: ", t, "Reward: ", reward, "Loss: ", loss)
             loss.backward()  # Backpropagate the error
             self.optimizer.step()  # Update the model parameters
-
-            prev_aim_point_image = aim_point_image
-            previous_vel = current_vel
 
             t += 1
         return t, kart.overall_distance / track.length
