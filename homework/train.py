@@ -45,6 +45,8 @@ def train(args):
 
             if train_logger is not None:
                 train_logger.add_scalar('loss', loss_val, global_step)
+                train_logger.add_scalar('weights/weight1', model.normalized_weight1.item(), global_step)
+                train_logger.add_scalar('weights/weight2', model.normalized_weight2.item(), global_step)
                 if global_step % 100 == 0:
                     log(train_logger, img, label, pred, global_step)
 
@@ -58,6 +60,7 @@ def train(args):
         avg_loss = np.mean(losses)
         if train_logger is None:
             print('epoch %-3d \t loss = %0.3f' % (epoch, avg_loss))
+            print(f"Weight1: {model.weight1.item():.4f}, Weight2: {model.weight2.item():.4f}")
         save_model(model)
 
     save_model(model)
@@ -89,7 +92,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--log_dir')
     # Put custom arguments here
-    parser.add_argument('-n', '--num_epoch', type=int, default=30)
+    parser.add_argument('-n', '--num_epoch', type=int, default=50)
     parser.add_argument('-w', '--num_workers', type=int, default=4)
     parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
     parser.add_argument('-c', '--continue_training', action='store_true')
