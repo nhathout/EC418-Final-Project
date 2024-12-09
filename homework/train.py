@@ -18,7 +18,7 @@ def train(args):
     """
     import torch
 
-    device = torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 	
     print("device:", device)
     model = model.to(device)
@@ -31,7 +31,7 @@ def train(args):
     import inspect
     transform = eval(args.transform, {k: v for k, v in inspect.getmembers(dense_transforms) if inspect.isclass(v)})
 
-    train_data = load_data('drive_data', transform=transform, num_workers=args.num_workers)
+    train_data = load_data('../drive_data', transform=transform, num_workers=args.num_workers)
 
     global_step = 0
     for epoch in range(args.num_epoch):
@@ -92,7 +92,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--log_dir')
     # Put custom arguments here
-    parser.add_argument('-n', '--num_epoch', type=int, default=50)
+    parser.add_argument('-n', '--num_epoch', type=int, default=1000)
     parser.add_argument('-w', '--num_workers', type=int, default=4)
     parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
     parser.add_argument('-c', '--continue_training', action='store_true')
