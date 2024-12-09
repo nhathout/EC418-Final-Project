@@ -53,6 +53,14 @@ class Planner(torch.nn.Module):
             torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),  # 3x3 kernel, maintain size
             torch.nn.ReLU(),
             torch.nn.Conv2d(32, 1, 1, 1)#heatmap
+        )# converge around .148 after ~15 epochs
+
+        self.conv2c = torch.nn.Sequential(
+            torch.nn.Conv2d(3, 8, kernel_size=3, stride=2, padding=1),  # 3x3 kernel, downsample by 2
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1),  # 3x3 kernel, maintain size
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(16, 1, 1, 1)#heatmap
         )
 
         self.conv4 = torch.nn.Sequential(
@@ -119,9 +127,10 @@ class Planner(torch.nn.Module):
         return: (B, 2) - Predicted aim point coordinates
         """
         # Forward pass through both CNN branches
-        x1 = self.conv1(img)    #Given
+        #x1 = self.conv1(img)    #Given
         #x2 = self.conv2(img)   #3x3 filters
-        x2b = self.conv2b(img) #two layers of 3x3 filters
+        x2b = self.conv2b(img)  #two layers of 3x3 filters
+        x2c = self.conv2c(img)   #two layers of 3x3 filters, reduced channels
         #x3 = self.conv3(img)   #more layers kernel:3->5->7
         #x4 = self.conv4(img)   #resnet esque poor performance
 
@@ -131,7 +140,7 @@ class Planner(torch.nn.Module):
         self.normalized_weight2 = self.weight2 / weight_sum
 
         # Combine the outputs using the normalized weights
-        combined_heatmap = self.normalized_weight1 * x1 + self.normalized_weight2 * x2b
+        combined_heatmap = self.normalized_weight1 * x2b + self.normalized_weight2 * x2c
 
         # Return the soft-argmax of the combined heatmap
         return spatial_argmax(combined_heatmap[:, 0])  # Get the first channel (since it's single-channel)
