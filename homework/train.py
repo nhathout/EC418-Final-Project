@@ -4,34 +4,41 @@ import torch.utils.tensorboard as tb
 import numpy as np
 from utils import load_data
 import dense_transforms
+from torchviz import make_dot  # Import torchviz
 
 def train(args):
     from os import path
     model = Planner()
     train_logger, valid_logger = None, None
+
     if args.log_dir is not None:
         train_logger = tb.SummaryWriter(path.join(args.log_dir, 'train'))
 
     """
     Your code here, modify your HW4 code
-    
     """
     import torch
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-	
     print("device:", device)
     model = model.to(device)
+
     if args.continue_training:
         model.load_state_dict(torch.load(path.join(path.dirname(path.abspath(__file__)), 'planner.th')))
 
     loss = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    
+
     import inspect
     transform = eval(args.transform, {k: v for k, v in inspect.getmembers(dense_transforms) if inspect.isclass(v)})
 
     train_data = load_data('../drive_data', transform=transform, num_workers=args.num_workers)
+
+    # Visualize the model graph with torchviz (only for the first batch)
+    example_data, _ = next(iter(train_data))
+    example_data = example_data.to(device)
+    dot = make_dot(model(example_data), params=dict(model.named_parameters()))
+    dot.render(path.join(args.log_dir, 'model_architecture'), format="png")  # Save graph as PNG
 
     global_step = 0
     for epoch in range(args.num_epoch):
@@ -44,17 +51,22 @@ def train(args):
             loss_val = loss(pred, label)
 
             if train_logger is not None:
+                # Log scalar loss
                 train_logger.add_scalar('loss', loss_val, global_step)
-                train_logger.add_scalar('weights/weight1', model.normalized_weight1.item(), global_step)
-                train_logger.add_scalar('weights/weight2', model.normalized_weight2.item(), global_step)
+
+                # Log histograms of weights
+                for name, param in model.named_parameters():
+                    train_logger.add_histogram(name, param, global_step)
+
                 if global_step % 100 == 0:
+                    # Log visualization
                     log(train_logger, img, label, pred, global_step)
 
             optimizer.zero_grad()
             loss_val.backward()
             optimizer.step()
             global_step += 1
-            
+
             losses.append(loss_val.detach().cpu().numpy())
         
         avg_loss = np.mean(losses)
@@ -63,6 +75,7 @@ def train(args):
             print(f"Weight1: {model.weight1.item():.4f}, Weight2: {model.weight2.item():.4f}")
         save_model(model)
 
+    # Final save of the model
     save_model(model)
 
 def log(logger, img, label, pred, global_step):
@@ -70,20 +83,18 @@ def log(logger, img, label, pred, global_step):
     logger: train_logger/valid_logger
     img: image tensor from data loader
     label: ground-truth aim point
-    pred: predited aim point
+    pred: predicted aim point
     global_step: iteration
     """
     import matplotlib.pyplot as plt
     import torchvision.transforms.functional as TF
     fig, ax = plt.subplots(1, 1)
     ax.imshow(TF.to_pil_image(img[0].cpu()))
-    WH2 = np.array([img.size(-1), img.size(-2)])/2
-    ax.add_artist(plt.Circle(WH2*(label[0].cpu().detach().numpy()+1), 2, ec='g', fill=False, lw=1.5))
-    ax.add_artist(plt.Circle(WH2*(pred[0].cpu().detach().numpy()+1), 2, ec='r', fill=False, lw=1.5))
+    WH2 = np.array([img.size(-1), img.size(-2)]) / 2
+    ax.add_artist(plt.Circle(WH2 * (label[0].cpu().detach().numpy() + 1), 2, ec='g', fill=False, lw=1.5))
+    ax.add_artist(plt.Circle(WH2 * (pred[0].cpu().detach().numpy() + 1), 2, ec='r', fill=False, lw=1.5))
     logger.add_figure('viz', fig, global_step)
-    del ax, fig
-
-
+    plt.close(fig)  # Close the figure to avoid memory leaks
 
 if __name__ == '__main__':
     import argparse
@@ -100,4 +111,3 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     train(args)
-
