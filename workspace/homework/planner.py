@@ -31,16 +31,16 @@ class Planner(torch.nn.Module):
             torch.nn.AvgPool2d(kernel_size=2, stride=2),  # Average pooling, downsample by 2
             torch.nn.Conv2d(128, 1, kernel_size=1, stride=1),  # Final layer: 1x1 kernel, produce single-channel heatmap
             torch.nn.Upsample(size=(48, 64), mode='bilinear', align_corners=False)  # Upsample to (48, 64) to match dimensionality for combined heatmap
-        )
+        )# loss at 0.079 after 50 epochs but not neccessarily converged
 
         # Define second CNN branch
         self.conv2 = torch.nn.Sequential(
             torch.nn.Conv2d(3, 16, 5, 2, 2),  #5x5 kernel stride 2 padding 2
             torch.nn.ReLU(),
             torch.nn.Conv2d(16, 1, 1, 1)  # Reduce to 1 output channel (heatmap)
-        )
+        )#loss converges around 0.152
 
-        self.conv2 = torch.nn.Sequential(
+        self.conv3 = torch.nn.Sequential(
             # Initial block: Expand channels and extract basic features
             torch.nn.Conv2d(3, 32, kernel_size=5, stride=2, padding=2),  # Downsample by 2
             torch.nn.BatchNorm2d(32),
@@ -75,10 +75,12 @@ class Planner(torch.nn.Module):
         )
         #cnn outputs are (B,1,48,64) (for now)
 
-        # Learnable weights for combining the two heatmaps
-        self.weight1 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the first branch
-        self.weight2 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the second branch
-        #self.weight3 = torch.nn.Parameter(torch.tensor(0))  # Weight for the third branch
+        # # Learnable weights for combining the two heatmaps
+        # self.weight1 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the first branch
+        # self.weight2 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the second branch
+        # # self.weight3 = torch.nn.Parameter(torch.tensor(0))  # Weight for the third branch
+        # self.normalized_weight1 = 0.5
+        # self.normalized_weight2 = 0.5
 
     def forward(self, img):
         """
@@ -89,14 +91,15 @@ class Planner(torch.nn.Module):
         # Forward pass through both CNN branches
         x1 = self.conv1(img)
         #x2 = self.conv2(img)
+        #x3 = self.conv3(img)
 
         # Normalize the weights so that they sum to 1
         # weight_sum = self.weight1 + self.weight2
-        # normalized_weight1 = self.weight1 / weight_sum
-        # normalized_weight2 = self.weight2 / weight_sum
+        # self.normalized_weight1 = self.weight1 / weight_sum
+        # self.normalized_weight2 = self.weight2 / weight_sum
 
         # Combine the outputs using the normalized weights
-        #combined_heatmap = normalized_weight1 * x1 + normalized_weight2 * x2
+        # combined_heatmap = self.normalized_weight1 * x1 + self.normalized_weight2 * x3
 
         # Return the soft-argmax of the combined heatmap
         return spatial_argmax(x1[:, 0])  # Get the first channel (since it's single-channel)
