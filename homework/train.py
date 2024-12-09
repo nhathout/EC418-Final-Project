@@ -1,44 +1,59 @@
+# train.py
+
 from planner import Planner, save_model 
 import torch
-import torch.utils.tensorboard as tb
 import numpy as np
 from utils import load_data
 import dense_transforms
-from torchviz import make_dot  # Import torchviz
+from torchviz import make_dot  # Optional, for model visualization
+import matplotlib.pyplot as plt
+import os
 
 def train(args):
     from os import path
     model = Planner()
-    train_logger, valid_logger = None, None
 
-    if args.log_dir is not None:
-        train_logger = tb.SummaryWriter(path.join(args.log_dir, 'train'))
+    # Set default log_dir if not provided
+    log_dir = args.log_dir if args.log_dir is not None else 'logs'
 
-    """
-    Your code here, modify your HW4 code
-    """
-    import torch
+    # Initialize data containers for plotting
+    loss_history = []
+    weight1_history = []
+    weight2_history = []
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print("device:", device)
     model = model.to(device)
 
     if args.continue_training:
-        model.load_state_dict(torch.load(path.join(path.dirname(path.abspath(__file__)), 'planner.th')))
+        model_path = path.join(path.dirname(path.abspath(__file__)), 'planner.th')
+        if path.exists(model_path):
+            model.load_state_dict(torch.load(model_path))
+            print(f"Loaded model from {model_path}")
+        else:
+            print(f"No model found at {model_path}. Starting fresh training.")
 
-    loss = torch.nn.L1Loss()
+    loss_fn = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
     import inspect
     transform = eval(args.transform, {k: v for k, v in inspect.getmembers(dense_transforms) if inspect.isclass(v)})
 
-    train_data = load_data('../drive_data', transform=transform, num_workers=args.num_workers)
+    # Load data from '../collected_data' instead of '../drive_data'
+    train_data = load_data('../drive_data', transform=transform, num_workers=args.num_workers, batch_size=128)
 
-    # Visualize the model graph with torchviz (only for the first batch)
-    example_data, _ = next(iter(train_data))
-    example_data = example_data.to(device)
-    dot = make_dot(model(example_data), params=dict(model.named_parameters()))
-    dot.render(path.join(args.log_dir, 'model_architecture'), format="png")  # Save graph as PNG
+    # Optional: Visualize the model graph with torchviz (only for the first batch)
+    try:
+        example_data, _ = next(iter(train_data))
+        example_data = example_data.to(device)
+        dot = make_dot(model(example_data), params=dict(model.named_parameters()))
+        os.makedirs(log_dir, exist_ok=True)
+        dot.render(path.join(log_dir, 'model_architecture'), format="png")  # Save graph as PNG
+        print(f"Model architecture saved to {path.join(log_dir, 'model_architecture.png')}")
+    except StopIteration:
+        print("Training data is empty. Skipping model architecture visualization.")
+    except Exception as e:
+        print(f"An error occurred while rendering the model architecture: {e}")
 
     global_step = 0
     for epoch in range(args.num_epoch):
@@ -48,52 +63,94 @@ def train(args):
             img, label = img.to(device), label.to(device)
 
             pred = model(img)
-            loss_val = loss(pred, label)
+            loss_val = loss_fn(pred, label)
 
-            if train_logger is not None:
-                # Log scalar loss
-                train_logger.add_scalar('loss', loss_val, global_step)
-
-                # Log histograms of weights
-                for name, param in model.named_parameters():
-                    train_logger.add_histogram(name, param, global_step)
-
-                if global_step % 100 == 0:
-                    # Log visualization
-                    log(train_logger, img, label, pred, global_step)
+            losses.append(loss_val.detach().cpu().numpy())
 
             optimizer.zero_grad()
             loss_val.backward()
             optimizer.step()
             global_step += 1
 
-            losses.append(loss_val.detach().cpu().numpy())
-        
+        # Calculate average loss for the epoch
         avg_loss = np.mean(losses)
-        if train_logger is None:
-            print('epoch %-3d \t loss = %0.3f' % (epoch, avg_loss))
-            print(f"Weight1: {model.weight1.item():.4f}, Weight2: {model.weight2.item():.4f}")
+        loss_history.append(avg_loss)
+
+        # Track model weights (modify based on your model's architecture)
+        try:
+            # Example: Assuming Planner has parameters 'weight1' and 'weight2'
+            # Replace with actual parameter names or tracking logic
+            weight1 = list(model.parameters())[0].data.mean().item()
+            weight2 = list(model.parameters())[1].data.mean().item()
+            weight1_history.append(weight1)
+            weight2_history.append(weight2)
+        except IndexError:
+            print("Model has fewer than 2 parameters.")
+            weight1_history.append(0)
+            weight2_history.append(0)
+
+        print(f'Epoch {epoch+1}/{args.num_epoch} \t Loss: {avg_loss:.4f}')
         save_model(model)
 
     # Final save of the model
     save_model(model)
+    print("Training completed and model saved.")
 
-def log(logger, img, label, pred, global_step):
+    # Plotting Loss Curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, args.num_epoch + 1), loss_history, label='Training Loss', color='blue')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.legend()
+    plt.grid(True)
+    loss_plot_path = path.join(log_dir, 'loss_curve.png')
+    plt.savefig(loss_plot_path)
+    plt.close()
+    print(f"Loss curve saved to {loss_plot_path}")
+
+    # Plotting Weights Evolution
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, args.num_epoch + 1), weight1_history, label='Weight1', color='red')
+    plt.plot(range(1, args.num_epoch + 1), weight2_history, label='Weight2', color='green')
+    plt.xlabel('Epoch')
+    plt.ylabel('Weight Value')
+    plt.title('Weights Evolution Over Epochs')
+    plt.legend()
+    plt.grid(True)
+    weights_plot_path = path.join(log_dir, 'weights_evolution.png')
+    plt.savefig(weights_plot_path)
+    plt.close()
+    print(f"Weights evolution plot saved to {weights_plot_path}")
+
+def log(img, label, pred, global_step, log_dir='plots'):
     """
-    logger: train_logger/valid_logger
-    img: image tensor from data loader
-    label: ground-truth aim point
-    pred: predicted aim point
-    global_step: iteration
+    Save visualization of predictions vs ground truth.
+    
+    Args:
+        img (torch.Tensor): Image tensor from data loader.
+        label (torch.Tensor): Ground-truth aim point.
+        pred (torch.Tensor): Predicted aim point.
+        global_step (int): Current global step.
+        log_dir (str): Directory to save visualization images.
     """
     import matplotlib.pyplot as plt
     import torchvision.transforms.functional as TF
+    import os
+
+    # Ensure the log directory exists
+    os.makedirs(log_dir, exist_ok=True)
+
     fig, ax = plt.subplots(1, 1)
     ax.imshow(TF.to_pil_image(img[0].cpu()))
     WH2 = np.array([img.size(-1), img.size(-2)]) / 2
+    # Adjust the scaling factor as needed based on your coordinate system
     ax.add_artist(plt.Circle(WH2 * (label[0].cpu().detach().numpy() + 1), 2, ec='g', fill=False, lw=1.5))
     ax.add_artist(plt.Circle(WH2 * (pred[0].cpu().detach().numpy() + 1), 2, ec='r', fill=False, lw=1.5))
-    logger.add_figure('viz', fig, global_step)
+    ax.set_title(f'Visualization at Step {global_step}')
+    
+    # Save the figure
+    plt.savefig(path.join(log_dir, f'viz_step_{global_step}.png'))
     plt.close(fig)  # Close the figure to avoid memory leaks
 
 if __name__ == '__main__':
@@ -101,13 +158,13 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--log_dir')
+    parser.add_argument('--log_dir', default='logs', help='Directory to save plots and model architecture')
     # Put custom arguments here
-    parser.add_argument('-n', '--num_epoch', type=int, default=1000)
-    parser.add_argument('-w', '--num_workers', type=int, default=4)
-    parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
-    parser.add_argument('-c', '--continue_training', action='store_true')
-    parser.add_argument('-t', '--transform', default='Compose([ColorJitter(0.2, 0.5, 0.5, 0.2), RandomHorizontalFlip(), ToTensor()])')
+    parser.add_argument('-n', '--num_epoch', type=int, default=1000, help='Number of training epochs')
+    parser.add_argument('-w', '--num_workers', type=int, default=4, help='Number of data loader workers')
+    parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3, help='Learning rate for optimizer')
+    parser.add_argument('-c', '--continue_training', action='store_true', help='Continue training from saved model')
+    parser.add_argument('-t', '--transform', default='Compose([ColorJitter(0.2, 0.5, 0.5, 0.2), RandomHorizontalFlip(), ToTensor()])', help='Data augmentation transforms')
 
     args = parser.parse_args()
     train(args)
