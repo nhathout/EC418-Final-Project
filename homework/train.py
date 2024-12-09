@@ -8,15 +8,19 @@ import dense_transforms
 from torchviz import make_dot  # Optional, for model visualization
 import matplotlib.pyplot as plt
 import os
+import json
 
 def train(args):
     from os import path
     model = Planner()
 
     # Set default log_dir if not provided
-    log_dir = args.log_dir if args.log_dir is not None else 'logs'
+    log_dir = args.log_dir if args.log_dir is not None else '../logs/train'
 
-    # Initialize data containers for plotting
+    # Ensure the log directory exists
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Initialize data containers for plotting and saving
     loss_history = []
     weight1_history = []
     weight2_history = []
@@ -39,7 +43,7 @@ def train(args):
     import inspect
     transform = eval(args.transform, {k: v for k, v in inspect.getmembers(dense_transforms) if inspect.isclass(v)})
 
-    # Load data from '../collected_data' instead of '../drive_data'
+    # Load data from '../drive_data' instead of '../collected_data'
     train_data = load_data('../drive_data', transform=transform, num_workers=args.num_workers, batch_size=128)
 
     # Optional: Visualize the model graph with torchviz (only for the first batch)
@@ -47,7 +51,6 @@ def train(args):
         example_data, _ = next(iter(train_data))
         example_data = example_data.to(device)
         dot = make_dot(model(example_data), params=dict(model.named_parameters()))
-        os.makedirs(log_dir, exist_ok=True)
         dot.render(path.join(log_dir, 'model_architecture'), format="png")  # Save graph as PNG
         print(f"Model architecture saved to {path.join(log_dir, 'model_architecture.png')}")
     except StopIteration:
@@ -76,25 +79,34 @@ def train(args):
         avg_loss = np.mean(losses)
         loss_history.append(avg_loss)
 
-        # Track model weights (modify based on your model's architecture)
+        # Track model weights
         try:
-            # Example: Assuming Planner has parameters 'weight1' and 'weight2'
-            # Replace with actual parameter names or tracking logic
-            weight1 = list(model.parameters())[0].data.mean().item()
-            weight2 = list(model.parameters())[1].data.mean().item()
+            # Assuming Planner has parameters 'weight1' and 'weight2'
+            weight1 = model.normalized_weight1.item()
+            weight2 = model.normalized_weight2.item()
             weight1_history.append(weight1)
             weight2_history.append(weight2)
-        except IndexError:
-            print("Model has fewer than 2 parameters.")
+        except AttributeError:
+            print("Model does not have 'weight1' and 'weight2' attributes.")
             weight1_history.append(0)
             weight2_history.append(0)
 
         print(f'Epoch {epoch+1}/{args.num_epoch} \t Loss: {avg_loss:.4f}')
+
+        # Optionally, log visualizations per epoch or at certain intervals
+        # log(img, label, pred, global_step, log_dir=log_dir)
+
         save_model(model)
 
     # Final save of the model
     save_model(model)
     print("Training completed and model saved.")
+
+    # Save training metrics
+    np.save(path.join(log_dir, 'loss_history.npy'), np.array(loss_history))
+    np.save(path.join(log_dir, 'weight1_history.npy'), np.array(weight1_history))
+    np.save(path.join(log_dir, 'weight2_history.npy'), np.array(weight2_history))
+    print(f"Training metrics saved to {log_dir}")
 
     # Plotting Loss Curve
     plt.figure(figsize=(10, 5))
@@ -150,7 +162,7 @@ def log(img, label, pred, global_step, log_dir='plots'):
     ax.set_title(f'Visualization at Step {global_step}')
     
     # Save the figure
-    plt.savefig(path.join(log_dir, f'viz_step_{global_step}.png'))
+    plt.savefig(os.path.join(log_dir, f'viz_step_{global_step}.png'))
     plt.close(fig)  # Close the figure to avoid memory leaks
 
 if __name__ == '__main__':
@@ -158,7 +170,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--log_dir', default='logs', help='Directory to save plots and model architecture')
+    parser.add_argument('--log_dir', default='../logs/train', help='Directory to save plots and model architecture')
     # Put custom arguments here
     parser.add_argument('-n', '--num_epoch', type=int, default=1000, help='Number of training epochs')
     parser.add_argument('-w', '--num_workers', type=int, default=4, help='Number of data loader workers')
