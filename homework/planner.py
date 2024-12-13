@@ -14,12 +14,12 @@ def spatial_argmax(logit):
 
 
 class ResidualBlock(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels, out_channels, stride=1, kernel = 3, pad = 1):
         super(ResidualBlock, self).__init__()
-        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=kernel, stride=stride, padding=pad)
         self.bn1 = torch.nn.BatchNorm2d(out_channels)
         self.relu = torch.nn.ReLU()
-        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=kernel, stride=1, padding=pad)
         self.bn2 = torch.nn.BatchNorm2d(out_channels)
 
         # Shortcut for downsampling, if necessary
@@ -37,7 +37,7 @@ class ResidualBlock(torch.nn.Module):
         x += shortcut  # Add the shortcut (skip connection) to the output
         x = self.relu(x)  # Apply ReLU after the addition
         return x
-
+    
 class Planner(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -73,24 +73,38 @@ class Planner(torch.nn.Module):
             torch.nn.Conv2d(128, 1, 1, 1)#heatmap
         )
 
-        #conv3
+        #conv3(conv6)
         self.conv3 = torch.nn.Sequential(
             torch.nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),  # 3x3 kernel, downsample by 2
             torch.nn.ReLU(),
             torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),  # 3x3 kernel, maintain size
             torch.nn.ReLU(),
             torch.nn.AvgPool2d(kernel_size=2, stride=2),  # Average pooling, downsample by 2
-            torch.nn.Conv2d(32, 64, kernel_size=5, stride=1, padding=2),  # 5x5 kernel, maintain size
+            torch.nn.Conv2d(32, 64, kernel_size=5, stride=2, padding=2),  # 5x5 kernel, downsample 2
             torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 128, kernel_size=7, stride=1, padding=3),  # 7x7 kernel, maintain size
+            torch.nn.Conv2d(64, 64, kernel_size=7, stride=1, padding=3),  # 7x7 kernel, maintain size
             torch.nn.ReLU(),
             torch.nn.AvgPool2d(kernel_size=2, stride=2),  # Average pooling, downsample by 2
             #torch.nn.Conv2d(128, 1, kernel_size=1, stride=1),  # Final layer: 1x1 kernel, produce single-channel heatmap
             #torch.nn.Upsample(size=(48, 64), mode='bilinear', align_corners=False)  # Upsample to (48, 64) to match dimensionality for combined heatmap
-            torch.nn.Conv2d(128, 3, 1, 1),  # Reduce to 1 output channel (heatmap)
-            torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
+            #torch.nn.Conv2d(128, 1, 1, 1),  # Reduce to 1 output channel (heatmap)
+            #torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
         )# loss at 0.079 after 50 epochs but not neccessarily converged
-
+        self.residual_block3 = ResidualBlock(64, 128, stride=1)
+        self.residual_block4 = ResidualBlock(128, 128, stride=2)
+        self.squeeze_excitation2 = torch.nn.Sequential(
+            torch.nn.AdaptiveAvgPool2d(1),
+            torch.nn.Conv2d(128, 16, kernel_size=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(16, 128, kernel_size=1),
+            torch.nn.Sigmoid()
+        )
+        self.final_block2 = torch.nn.Sequential(
+            torch.nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),# (B, 32, 24, 32)
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(64, 1, 1, 1),  # Reduce to 1 output channel (heatmap)
+            #torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
+        )
 
         #Deeper architecture with skip connections, SE layer
         #Conv4
@@ -111,10 +125,12 @@ class Planner(torch.nn.Module):
         )
         self.final_block = torch.nn.Sequential(
             torch.nn.Conv2d(64, 1, 1, 1),  # Reduce to 1 output channel (heatmap)
-            torch.nn.Upsample(size=(48, 64), mode='bilinear', align_corners=False)  # Match desired output dimensions
+            #torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
         )
         ##### end conv4
 
+
+        ###conv5
         self.conv5 = torch.nn.Sequential(#Autoencoder
             torch.nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),# (B, 16, 48, 64)
             torch.nn.ReLU(),
@@ -124,14 +140,60 @@ class Planner(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),# (B, 32, 24, 32)
             torch.nn.ReLU(),
-            torch.nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),# (B, 16, 48, 64)
+            torch.nn.ConvTranspose2d(32, 32, kernel_size=3, stride=2, padding=1, output_padding=1),# (B, 16, 48, 64)
+            torch.nn.ReLU(),
+            torch.nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
             torch.nn.ReLU(),
             #torch.nn.ConvTranspose2d(16, 1, kernel_size=3, stride=1, padding=1, output_padding=1),# (B, 1, 48, 64) Heatmap layer
             #torch.nn.Upsample(size=(48, 64), mode='bilinear', align_corners=False)
-            torch.nn.Conv2d(16, 3, 1, 1),  # Reduce to 1 output channel (heatmap)
-            torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
+            torch.nn.Conv2d(16, 1, 1, 1),  # Reduce to 1 output channel (heatmap)
+            #torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
         )
+
+
+        ###Conv7
+        self.conv7 = torch.nn.Sequential(#my deeep net
+            torch.nn.Conv2d(3, 64, kernel_size=5, stride=2, padding=3),  # 3x3 kernel, downsample by 2
+            torch.nn.ReLU(),
+            #torch.nn.AvgPool2d(kernel_size=2, stride=2)  # Average pooling, downsample by 2
+            torch.nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.residual_block5 = ResidualBlock(64, 64, stride=1)
+        self.residual_block5b = ResidualBlock(64, 64, stride=1, kernel = 5, pad = 2)
+        self.residual_block5c = ResidualBlock(64, 64, stride=1, kernel = 7, pad = 3)
+
+        self.residual_block6 = ResidualBlock(64, 128, stride=2)
+        self.residual_block6a = ResidualBlock(128, 128, stride = 1)
+        self.residual_block6b = ResidualBlock(128,128, stride = 1, kernel = 5, pad = 2)
+        self.residual_block6c = ResidualBlock(128, 128, stride=1, kernel = 7, pad = 3)
+
+        self.residual_block7 = ResidualBlock(128, 256, stride=2)
+        self.residual_block7a = ResidualBlock(256, 256, stride=1)
+        self.residual_block7b = ResidualBlock(256, 256, stride=1, kernel = 5, pad = 2)
+        self.residual_block7c = ResidualBlock(256, 256, stride=1, kernel = 7, pad = 3)
+        
+        self.squeeze_excitation3 = torch.nn.Sequential(
+            torch.nn.AdaptiveAvgPool2d(1),
+            torch.nn.Conv2d(256, 16, kernel_size=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(16, 256, kernel_size=1),
+            torch.nn.Sigmoid()
+        )
+        self.final_block3 = torch.nn.Sequential(
+            torch.nn.Conv2d(256, 1, 1, 1),  # Reduce to 1 output channel (heatmap)
+            #torch.nn.Upsample(size=(96, 128), mode='bilinear', align_corners=False)  # Match desired output dimensions
+        )
+
+
+
         #cnn outputs are (B,1,48,64) (for now)
+
+        ####output formatting
+        self.output = torch.nn.Sequential(
+            torch.nn.Conv2d(3, 16, kernel_size=5, stride=2, padding=2),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(16,1,1,1)
+        )
 
         # # Learnable weights for combining the two heatmaps
         self.weight1 = torch.nn.Parameter(torch.tensor(0.5))  # Weight for the first branch
@@ -154,18 +216,32 @@ class Planner(torch.nn.Module):
         #x3 = self.conv3(img)   #more layers kernel:3->5->7
         #x4 = self.final_block(self.residual_block2(self.residual_block1(self.initial_block(img)) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(img)))))) #resnet esque
         #x5 = self.conv5(img) #autoencoder
-        x6a = self.final_block(self.residual_block2(self.residual_block1(self.initial_block(self.conv3(self.conv2b(img)))) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(self.conv3(self.conv2b(img))))))))
-        x6b = self.final_block(self.residual_block2(self.residual_block1(self.initial_block(self.conv5(self.conv3(self.conv2b(img))))) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(self.conv5(self.conv3(self.conv2b(img)))))))))
+        #x6a = self.output(self.final_block(self.residual_block2(self.residual_block1(self.initial_block(self.conv3(img))) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(self.conv3(self.conv2b(img)))))))))
+        #x6b = self.output(self.final_block(self.residual_block2(self.residual_block1(self.initial_block(self.conv5(self.conv3(self.conv2b(img))))) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(self.conv5(self.conv3(self.conv2b(img))))))))))
+        #x7 = self.output(self.final_block(self.residual_block2(self.residual_block1(self.initial_block(self.conv5(img))) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(self.conv5(img))))))))
+        #x8 = self.final_block(self.residual_block2(self.residual_block1(self.initial_block(self.conv3(img))) * self.squeeze_excitation(self.residual_block2(self.residual_block1(self.initial_block(self.conv3(img)))))))
+        #x9 = self.final_block2(self.residual_block4(self.residual_block3(self.conv3(img)) * self.squeeze_excitation2(self.residual_block4(self.residual_block3(self.conv3(img))))))
+        #xbaseline = self.output(img)
+        x10 = self.residual_block7b(self.residual_block7(self.residual_block6b(self.residual_block6(self.residual_block5(self.conv7(img))))))
+        se10 = self.squeeze_excitation3(x10)
+        x10 = self.final_block3(x10*se10)
+        # x11 = self.residual_block7a(self.residual_block7(self.residual_block6a(self.residual_block6(self.residual_block5(self.residual_block5(self.conv7(img)))))))
+        # se11 = self.squeeze_excitation3(x11)
+        # x11 = self.final_block3(x11*se11)   #3x3 kernel resnet
+        # x12 = self.residual_block7c(self.residual_block7(self.residual_block6b(self.residual_block6(self.residual_block5(self.residual_block5(self.conv7(img)))))))
+        # se12 = self.squeeze_excitation3(x12)
+        # x12 = self.final_block3(x12*se12)
+
         # Normalize the weights so that they sum to 1
         weight_sum = self.weight1 + self.weight2
         self.normalized_weight1 = self.weight1 / weight_sum
         self.normalized_weight2 = self.weight2 / weight_sum
 
         # Combine the outputs using the normalized weights
-        combined_heatmap = self.normalized_weight1 * x6a + self.normalized_weight2 * x6b
+        #combined_heatmap = self.normalized_weight1 * x4 + self.normalized_weight2 * x8
 
         # Return the soft-argmax of the combined heatmap
-        return spatial_argmax(combined_heatmap[:, 0])  # Get the first channel (since it's single-channel)
+        return spatial_argmax(x10[:, 0])  # Get the first channel (since it's single-channel)
 
 
 def save_model(model):
